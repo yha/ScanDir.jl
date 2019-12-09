@@ -2,3 +2,6 @@ name = "ScanDir"
 uuid = "af3a3400-1793-11ea-1d1f-a522511abb08"
 authors = ["yha <yharel@campus.technion.ac.il>"]
 version = "0.1.0"
+
+[compat]
+julia = "1"
