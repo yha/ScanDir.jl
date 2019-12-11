@@ -15,7 +15,7 @@ Benchmarks of `ScanDir.walkdir` on one Windows machine have shown a speedup fact
 
 ## Usage
 `scandir(path::AbstractString=".")` returns a vector of `DirEntry`. 
-Each `DirEntry`'s filename is accessible via the a `name` field. 
+Each `DirEntry`'s filename is accessible via the `name` field. 
 Its type can be queried by the standard `Base` functions (`isfile`, `isdir`, `islink`, `isfifo`, `issocket`, `ischardev`, `isblockdev`).
 
 `ScanDir.walkdir` is a faster implementation of `Base.walkdir` (https://docs.julialang.org/en/v1/base/file/#Base.Filesystem.walkdir), and has the same interface.
