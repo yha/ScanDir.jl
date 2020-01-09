@@ -34,7 +34,11 @@ function scandir(path::AbstractString)
     end
 
     # Clean up the request string
-    ccall(:jl_uv_fs_req_cleanup, Cvoid, (Ptr{UInt8},), uv_readdir_req)
+    if VERSION >= v"1.3"
+        ccall(:uv_fs_req_cleanup, Cvoid, (Ptr{UInt8},), uv_readdir_req)
+    else
+        ccall(:jl_uv_fs_req_cleanup, Cvoid, (Ptr{UInt8},), uv_readdir_req)
+    end
 
     return entries
 end
