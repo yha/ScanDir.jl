@@ -7,17 +7,19 @@ import Base: eventloop
 
 struct DirEntry
     name::String
+    path::String
     type::Int
 end
 
+_islink(e::DirEntry) = e.type == 3
 for (i,s) in enumerate((:isfile, :isdir, :islink, :isfifo, :issocket, :ischardev, :isblockdev))
-    @eval Base.Filesystem.$s(e::DirEntry) = e.type == $i
+    @eval Base.Filesystem.$s(e::DirEntry) = e.type == $i || _islink(e) && $s(e.path)
 end
 
 filename(e::DirEntry) = e.name
 
 # Implementation copied from Base.readdir and modified to return DirEntry's
-function scandir(path::AbstractString)
+function scandir(path::AbstractString=".")
     # Allocate space for uv_fs_t struct
     uv_readdir_req = zeros(UInt8, ccall(:jl_sizeof_uv_fs_t, Int32, ()))
 
@@ -30,7 +32,9 @@ function scandir(path::AbstractString)
     entries = DirEntry[]
     ent = Ref{uv_dirent_t}()
     while Base.UV_EOF != ccall(:uv_fs_scandir_next, Cint, (Ptr{Cvoid}, Ptr{uv_dirent_t}), uv_readdir_req, ent)
-        push!(entries, DirEntry(unsafe_string(ent[].name), ent[].typ))
+        ent_name = unsafe_string(ent[].name)
+        ent_path = joinpath(path, ent_name)
+        push!(entries, DirEntry(ent_name, ent_path, ent[].typ))
     end
 
     # Clean up the request string
@@ -43,11 +47,11 @@ function scandir(path::AbstractString)
     return entries
 end
 
-scandir() = scandir(".")
+_walkdir_entry(root, dirs, files) = (root = root, dirs = dirs, files = files)
 
 # Implementation copied from Base.walkdir and modified to use scandir,
 # to avoid unnecessary stat()ing
-function walkdir(root; topdown=true, follow_symlinks=false, onerror=throw)
+function walkdir(root; topdown=true, follow_symlinks=false, onerror=throw, prune=_->false)
     content = nothing
     try
         content = scandir(root)
@@ -59,25 +63,27 @@ function walkdir(root; topdown=true, follow_symlinks=false, onerror=throw)
         close(chnl)
         return chnl
     end
-    dirs = filter(isdir, content)
-    files = filter(isfile, content)
+
+    isfilelike(e) = (!follow_symlinks && islink(e)) || !isdir(e)
+    filter!(!prune, content)
+    dirs = filter(!isfilelike, content)
+    files = filter(isfilelike, content)
     dirnames = map(filename, dirs)
     filenames = map(filename, files)
 
     function _it(chnl)
         if topdown
-            put!(chnl, (root, dirnames, filenames))
+            put!(chnl, _walkdir_entry(root, dirnames, filenames))
         end
         for dir in dirs
-            if follow_symlinks || !islink(dir)
-                path = joinpath(root,dir.name)
-                for (root_l, dirs_l, files_l) in walkdir(path, topdown=topdown, follow_symlinks=follow_symlinks, onerror=onerror)
-                    put!(chnl, (root_l, dirs_l, files_l))
-                end
+            path = joinpath(root,dir.name)
+            for (root_l, dirs_l, files_l) in walkdir(path,
+                    topdown=topdown, follow_symlinks=follow_symlinks, onerror=onerror, prune=prune)
+                put!(chnl, _walkdir_entry(root_l, dirs_l, files_l))
             end
         end
         if !topdown
-            put!(chnl, (root, dirnames, filenames))
+            put!(chnl, _walkdir_entry(root, dirnames, filenames))
         end
     end
 
