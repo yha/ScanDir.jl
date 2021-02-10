@@ -18,7 +18,7 @@ Benchmarks of `ScanDir.walkdir` on one Windows machine have shown a speedup fact
 Each `DirEntry`'s filename is accessible via the `name` field. 
 Its type can be queried by the standard `Base` functions (`isfile`, `isdir`, `islink`, `isfifo`, `issocket`, `ischardev`, `isblockdev`). This will only call `stat` if  necessary -- which happens if the entry is a symlink and the type of the target needs to be determined. In this case, the link is followed from the path supplied to `scandir`, so the result may depend on the working directory if that path is relative.
 
-```
+```julia
 julia> dir = mktempdir();
 julia> cd(dir)
 julia> mkdir("subdir");
@@ -41,7 +41,7 @@ julia> isdir.(entries) # triggers `stat` call for "link" only
  - it returns named tuples (root=..., dirs=..., file=...)
  - it supports a `prune` keyword argument to filter the returned contents.
 
-```
+```julia
 julia> touch("subdir/file2");
 julia> mkdir("subdir/skipme");
 julia> touch("subdir/skipme/file3");
