@@ -1,94 +1,114 @@
 module ScanDir
 
-export scandir
+export scandir, scandirtree, DirEntry
 
 import Base.Filesystem: uv_dirent_t
-import Base: eventloop
+import Base: uv_error, _sizeof_uv_fs
+
+module PosixFileTypes
+    @enum PosixFileType Unknown File Directory Link FIFO Socket CharDev BlockDev
+end
+using .PosixFileTypes: PosixFileType
 
 struct DirEntry
     name::String
     path::String
-    type::Int
+    type::PosixFileType
 end
 
-_islink(e::DirEntry) = e.type == 3
+function Base.show(io::IO, ::MIME"text/plain", e::DirEntry)
+    print(io, "<", lowercase(string(e.type)), " ", repr(e.path), ">")
+end
+
+
+_islink(e::DirEntry) = e.type == PosixFileTypes.Link
 for (i,s) in enumerate((:isfile, :isdir, :islink, :isfifo, :issocket, :ischardev, :isblockdev))
-    @eval Base.Filesystem.$s(e::DirEntry) = e.type == $i || _islink(e) && $s(e.path)
+    @eval Base.Filesystem.$s(e::DirEntry) = e.type == PosixFileType($i) || _islink(e) && $s(e.path)
 end
 
 filename(e::DirEntry) = e.name
 
 # Implementation copied from Base.readdir and modified to return DirEntry's
-function scandir(path::AbstractString=".")
+function scandir(dir::AbstractString="."; sort=true)
     # Allocate space for uv_fs_t struct
-    uv_readdir_req = zeros(UInt8, ccall(:jl_sizeof_uv_fs_t, Int32, ()))
+    req = Libc.malloc(_sizeof_uv_fs)
+    try
+        # defined in sys.c, to call uv_fs_readdir, which sets errno on error.
+        err = ccall(:uv_fs_scandir, Int32, (Ptr{Cvoid}, Ptr{Cvoid}, Cstring, Cint, Ptr{Cvoid}),
+                    C_NULL, req, dir, 0, C_NULL)
+        err < 0 && uv_error("readdir($(repr(dir)))", err)
 
-    # defined in sys.c, to call uv_fs_readdir, which sets errno on error.
-    err = ccall(:uv_fs_scandir, Int32, (Ptr{Cvoid}, Ptr{UInt8}, Cstring, Cint, Ptr{Cvoid}),
-                eventloop(), uv_readdir_req, path, 0, C_NULL)
-    err < 0 && throw(SystemError("unable to read directory $path", -err))
+        # iterate the listing into entries
+        entries = DirEntry[]
+        ent = Ref{uv_dirent_t}()
+        while Base.UV_EOF != ccall(:uv_fs_scandir_next, Cint, (Ptr{Cvoid}, Ptr{uv_dirent_t}), req, ent)
+            ent_name = unsafe_string(ent[].name)
+            ent_path = joinpath(dir, ent_name)
+            push!(entries, DirEntry(ent_name, ent_path, PosixFileType(ent[].typ)))
+        end
 
-    # iterate the listing into entries
-    entries = DirEntry[]
-    ent = Ref{uv_dirent_t}()
-    while Base.UV_EOF != ccall(:uv_fs_scandir_next, Cint, (Ptr{Cvoid}, Ptr{uv_dirent_t}), uv_readdir_req, ent)
-        ent_name = unsafe_string(ent[].name)
-        ent_path = joinpath(path, ent_name)
-        push!(entries, DirEntry(ent_name, ent_path, ent[].typ))
+        # Clean up the request string
+        # on newer julia versions this can be: Base.Filesystem.uv_fs_req_cleanup(req)
+        ccall(:uv_fs_req_cleanup, Cvoid, (Ptr{Cvoid},), req)
+
+        # sort entries unless opted out
+        sort && sort!(entries; by=filename)
+
+        return entries
+    finally
+        Libc.free(req)
     end
-
-    # Clean up the request string
-    if VERSION >= v"1.3"
-        ccall(:uv_fs_req_cleanup, Cvoid, (Ptr{UInt8},), uv_readdir_req)
-    else
-        ccall(:jl_uv_fs_req_cleanup, Cvoid, (Ptr{UInt8},), uv_readdir_req)
-    end
-
-    return entries
 end
-
-_walkdir_entry(root, dirs, files) = (root = root, dirs = dirs, files = files)
 
 # Implementation copied from Base.walkdir and modified to use scandir,
 # to avoid unnecessary stat()ing
-function walkdir(root; topdown=true, follow_symlinks=false, onerror=throw, prune=_->false)
-    content = nothing
-    try
-        content = scandir(root)
-    catch err
-        isa(err, SystemError) || throw(err)
-        onerror(err)
-        # Need to return an empty closed channel to skip the current root folder
-        chnl = Channel(0)
-        close(chnl)
-        return chnl
-    end
-
-    isfilelike(e) = (!follow_symlinks && islink(e)) || !isdir(e)
-    filter!(!prune, content)
-    dirs = filter(!isfilelike, content)
-    files = filter(isfilelike, content)
-    dirnames = map(filename, dirs)
-    filenames = map(filename, files)
-
-    function _it(chnl)
+function scandirtree(root="."; topdown=true, follow_symlinks=false, onerror=throw, prune=_->false)
+    function _scandirtree(chnl, root)
+        tryf(f, p) = try
+                f(p)
+            catch err
+                isa(err, Base.IOError) || rethrow()
+                try
+                    onerror(err)
+                catch err2
+                    close(chnl, err2)
+                end
+                return
+            end
+        isfilelike(e) = (!follow_symlinks && islink(e)) || !isdir(e)
+        @show root
+        content = tryf(scandir, root)
+        content === nothing && return
+        dirs = DirEntry[]
+        files = DirEntry[]
+        for entry in content
+            prune(entry) || push!(isfilelike(entry) ? files : dirs, entry)
+        end
+        
         if topdown
-            put!(chnl, _walkdir_entry(root, dirnames, filenames))
+            push!(chnl, (; root, dirs, files))
         end
         for dir in dirs
-            path = joinpath(root,dir.name)
-            for (root_l, dirs_l, files_l) in walkdir(path,
-                    topdown=topdown, follow_symlinks=follow_symlinks, onerror=onerror, prune=prune)
-                put!(chnl, _walkdir_entry(root_l, dirs_l, files_l))
-            end
+            _scandirtree(chnl, joinpath(root, dir.name))
         end
         if !topdown
-            put!(chnl, _walkdir_entry(root, dirnames, filenames))
+            push!(chnl, (; root, dirs, files))
         end
+        nothing
     end
-
-    return Channel(_it)
+    TreeEntry = NamedTuple{(:root, :dirs, :files), Tuple{String, Vector{DirEntry}, Vector{DirEntry}}}
+    return Channel{TreeEntry}(chnl -> _scandirtree(chnl, root))
 end
 
+
+function walkdir(root="."; topdown=true, follow_symlinks=false, onerror=throw, prune=_->false)
+    scan_channel = scandirtree(root; topdown, follow_symlinks, onerror, prune)
+    WalkdirEntry = NamedTuple{(:root, :dirs, :files), Tuple{String, Vector{String}, Vector{String}}}
+    return Channel{WalkdirEntry}() do channel
+        for (root, dirs, files) in scan_channel
+            push!(channel, (; root, dirs = [e.name for e in dirs], files = [e.name for e in files]))
+        end
+    end
+end
 
 end # module
