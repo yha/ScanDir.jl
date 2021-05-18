@@ -76,7 +76,6 @@ function scandirtree(root="."; topdown=true, follow_symlinks=false, onerror=thro
                 return
             end
         isfilelike(e) = (!follow_symlinks && islink(e)) || !isdir(e)
-        @show root
         content = tryf(scandir, root)
         content === nothing && return
         dirs = DirEntry[]
