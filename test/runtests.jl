@@ -151,7 +151,9 @@ cd(dirwalk) do
 
         if !symlink_err
             let files = ScanDir.walkdir(joinpath(".", "sub_dir3"); follow_symlinks=true)
-                @test_throws Base._UVError("stat($(repr(foo)))", Base.UV_ELOOP)  take!(files)
+                # wording of this error differs on julia 1.5, so just check for IOError
+                #@test_throws Base._UVError("stat($(repr(foo)))", Base.UV_ELOOP)  take!(files)
+                @test_throws Base.IOError  take!(files)
             end
             root, dirs, files = take!(ScanDir.walkdir(joinpath(".", "sub_dir3"); follow_symlinks=false))
             @test root == joinpath(".", "sub_dir3")
