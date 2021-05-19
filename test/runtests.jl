@@ -150,10 +150,10 @@ cd(dirwalk) do
         end
 
         if !symlink_err
-            let files = walkdir(joinpath(".", "sub_dir3"); follow_symlinks=true)
+            let files = ScanDir.walkdir(joinpath(".", "sub_dir3"); follow_symlinks=true)
                 @test_throws Base._UVError("stat($(repr(foo)))", Base.UV_ELOOP)  take!(files)
             end
-            root, dirs, files = take!(walkdir(joinpath(".", "sub_dir3"); follow_symlinks=false))
+            root, dirs, files = take!(ScanDir.walkdir(joinpath(".", "sub_dir3"); follow_symlinks=false))
             @test root == joinpath(".", "sub_dir3")
             @test dirs == []
             @test files == ["foo"]

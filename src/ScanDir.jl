@@ -60,28 +60,34 @@ function scandir(dir::AbstractString="."; sort=true)
     end
 end
 
+_channel_try_io(f, channel, onerror) = try
+    f()
+catch err
+    isa(err, Base.IOError) || rethrow()
+    try
+        onerror(err)
+    catch err2
+        close(channel, err2)
+    end
+    return
+end
+
 # Implementation copied from Base.walkdir and modified to use scandir,
 # to avoid unnecessary stat()ing
 function scandirtree(root="."; topdown=true, follow_symlinks=false, onerror=throw, prune=_->false)
     function _scandirtree(chnl, root)
-        tryf(f, p) = try
-                f(p)
-            catch err
-                isa(err, Base.IOError) || rethrow()
-                try
-                    onerror(err)
-                catch err2
-                    close(chnl, err2)
-                end
-                return
-            end
         isfilelike(e) = (!follow_symlinks && islink(e)) || !isdir(e)
+        tryf(f, p) = _channel_try_io(()->f(p), chnl, onerror)
+        
         content = tryf(scandir, root)
         content === nothing && return
         dirs = DirEntry[]
         files = DirEntry[]
         for entry in content
-            prune(entry) || push!(isfilelike(entry) ? files : dirs, entry)
+            prune(entry) && continue
+            filelike = tryf(isfilelike, entry)
+            filelike === nothing && return
+            push!(filelike ? files : dirs, entry)
         end
         
         if topdown
@@ -104,8 +110,10 @@ function walkdir(root="."; topdown=true, follow_symlinks=false, onerror=throw, p
     scan_channel = scandirtree(root; topdown, follow_symlinks, onerror, prune)
     WalkdirEntry = NamedTuple{(:root, :dirs, :files), Tuple{String, Vector{String}, Vector{String}}}
     return Channel{WalkdirEntry}() do channel
-        for (root, dirs, files) in scan_channel
-            push!(channel, (; root, dirs = [e.name for e in dirs], files = [e.name for e in files]))
+        _channel_try_io(channel, onerror) do
+            for (root, dirs, files) in scan_channel
+                push!(channel, (; root, dirs = [e.name for e in dirs], files = [e.name for e in files]))
+            end
         end
     end
 end
