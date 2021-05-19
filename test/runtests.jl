@@ -138,10 +138,11 @@ cd(dirwalk) do
     # Test that symlink loops don't cause errors
     if has_symlinks
         mkdir(joinpath(".", "sub_dir3"))
+        foo = joinpath(".", "sub_dir3", "foo")
         # this symlink requires admin privileges on Windows:
         symlink_err = false
         try
-            symlink("foo", joinpath(".", "sub_dir3", "foo"))
+            symlink("foo", foo)
         catch e
             symlink_err = true
             showerror(stderr, e); println(stderr)
@@ -149,8 +150,10 @@ cd(dirwalk) do
         end
 
         if !symlink_err
-            @test_throws Base.IOError ScanDir.walkdir(joinpath(".", "sub_dir3"); follow_symlinks=true)
-            root, dirs, files = take!(ScanDir.walkdir(joinpath(".", "sub_dir3"); follow_symlinks=false))
+            let files = walkdir(joinpath(".", "sub_dir3"); follow_symlinks=true)
+                @test_throws Base._UVError("stat($(repr(foo)))", Base.UV_ELOOP)  take!(files)
+            end
+            root, dirs, files = take!(walkdir(joinpath(".", "sub_dir3"); follow_symlinks=false))
             @test root == joinpath(".", "sub_dir3")
             @test dirs == []
             @test files == ["foo"]
