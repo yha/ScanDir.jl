@@ -25,10 +25,10 @@ julia> mkdir("subdir");
 julia> touch("file");
 julia> symlink("subdir", "link")
 julia> entries = scandir()
-3-element Array{ScanDir.DirEntry,1}:
- ScanDir.DirEntry("file", ".\\file", 1)
- ScanDir.DirEntry("link", ".\\link", 3)
- ScanDir.DirEntry("subdir", ".\\subdir", 2)
+3-element Vector{DirEntry}:
+ <file "./file">
+ <link "./link">
+ <directory "./subdir">
 
 julia> isdir.(entries) # triggers `stat` call for "link" only
 3-element BitArray{1}:
